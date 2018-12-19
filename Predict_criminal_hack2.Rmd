@@ -1,0 +1,508 @@
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(GGally)
+library(moments)
+library(car)
+library(DMwR)
+library(caret)
+library(MASS)
+library(glmnet)
+library(doParallel)
+library(rpart)
+library(randomForest)
+library(xgboost)
+```
+
+```{r}
+train = read.csv("criminal_train.csv")
+test = read.csv("criminal_test.csv")
+```
+
+
+```{r}
+library(ROSE)
+train1 <- ovun.sample(Criminal ~ ., data = train, method = "both", p=0.10,N=45718, seed = 1)$data
+table(train1$Criminal)
+
+```
+
+
+```{r}
+#pca
+
+library(e1071)
+pca = preProcess(x = train[-72],method = 'pca',pcaComp = 2)
+
+train_pca = predict(pca,train)
+train_pca = train_pca[c(2,3,1)]
+
+pca1 = preProcess(x = test,method = 'pca',pcaComp = 2)
+test_pca = predict(pca1,test)
+
+
+
+
+```
+
+
+
+```{r}
+library(corrplot)
+m <- cor(train[-72])
+corrplot(m, method = "number")
+
+
+findCorrelation(m,names = T,cutoff = 0.90)
+```
+
+```{r}
+nu <- c("HLCNOTYR","IIOTHHLT" ,"GRPHLTIN" ,"IRINSUR4" ,"IROTHHLT" ,"IIINSUR4" ,"PRVHLTIN" ,"IICHMPUS",
+        "IIMEDICR","IIMCDCHP", "HLNVREF" , "HLNVOFFR" ,"HLNVNEED", "HLNVCOST" ,"IIWELMOS", "TOOLONG",
+        "HLCALL99" ,"AIIND102")
+train  <- train[,!(names(train) %in% nu)]
+train1  <- train1[,!(names(train1) %in% nu)]
+test <- test[,!(names(test) %in% nu)]
+colSums(is.na(train))
+
+```
+
+```{r}
+prop.table(table(train$Criminal))
+
+barplot(prop.table(table(train$Criminal)),
+        col = rainbow(2),
+        ylim = c(0,1),
+        main = "Class Distribution")
+```
+
+```{r}
+train$PERID <- NULL
+train1$PERID <- NULL
+test$PERID <- NULL
+```
+
+```{r}
+str(train1)
+```
+
+```{r}
+train1$Criminal = as.factor(train1$Criminal)
+
+```
+
+
+```{r}
+library(ROSE)
+under <- ovun.sample(Criminal~., data = train, method = "under")$data
+table(under$Criminal)
+```
+
+```{r}
+library(DMwR)
+smote <- SMOTE(Criminal ~.,train, perc.over = 100, perc.under=1500)
+
+prop.table(table(smote$Criminal))
+```
+
+```{r}
+sub <- sample(nrow(train), floor(nrow(train) * 0.8))
+training <- train[sub, ]
+testing <- train[-sub, ]
+
+```
+
+```{r}
+
+
+train[,-53] <- scale(train[,-53],center = T,scale = T)
+train1[,-53] <- scale(train1[,-53],center = T,scale = T)
+test[,1:52] <- scale(test[,1:52] ,center = T,scale = T)
+```
+
+
+
+```{r}
+library(h2o)
+h2o.init()
+h2o.clusterInfo()
+localH2O <- h2o.init(nthreads = -1)
+h2o.init(
+  nthreads=-1,          
+  max_mem_size = "2G") 
+```
+
+```{r}
+train.h2o <- as.h2o(train)
+train1.h2o <- as.h2o(train1)
+test.h2o <- as.h2o(test) 
+#smote.h2o <- as.h2o(smote)
+y <- 45
+x <- (1:44)
+```
+
+```{r}
+gbm <- h2o.gbm(x =x, y = y, training_frame = train.h2o) 
+gbm
+```
+
+```{r}
+predict.gb1 <- as.data.frame(h2o.predict(gbm, test.h2o))
+#pred_test = ifelse(predict.rf> 0.4 ,"1","0")
+write.csv(predict.gb1,"12.csv")
+
+```
+
+```{r}
+gbm1 <- h2o.gbm(x = x, y = y, training_frame = train.h2o, nfolds = 4, seed = 0xDECAF)
+gbm1
+```
+
+```{r}
+gbm <- h2o.gbm(
+  x = x, 
+  y = y, 
+  training_frame = train.h2o,
+  ntrees = 10000,                                                            
+  learn_rate=0.01,                                                         
+  stopping_rounds = 5, stopping_tolerance = 1e-4, stopping_metric = "AUC", 
+  sample_rate = 0.8,                                                       
+  col_sample_rate = 0.8,                                                   
+  seed = 1234,                                                             
+  score_tree_interval = 10                                                 
+)
+
+```
+
+
+```{r}
+system.time(
+rforest.model <- h2o.randomForest(y=y, x=x, training_frame = train.h2o, ntrees = 100, mtries = 44, max_depth = 10, seed = 21)
+)
+
+```
+
+```{r}
+plot(rforest.model)
+```
+
+```{r}
+h2o.varimp(rforest.model)
+h2o.performance(rforest.model)
+h2o.performance(rf2)
+```
+    
+               
+
+```{r}
+predict.rf <- as.data.frame(h2o.predict(rforest.model, test.h2o))
+#pred_test = ifelse(predict.rf> 0.4 ,"1","0")
+write.csv(predict.rf,"555.csv")
+confusionMatrix(predict.rf$predict,testing$Criminal,positive = "1")
+
+```
+
+
+list(strategy = "RandomDiscrete", max_models = 10, seed = 1)
+list(strategy = "RandomDiscrete", max_runtime_secs = 3600)
+list(strategy = "RandomDiscrete", max_models = 42, max_runtime_secs = 28800)
+list(strategy = "RandomDiscrete", stopping_tolerance = 0.001, stopping_rounds = 10)
+list(strategy = "RandomDiscrete", stopping_metric = "misclassification", stopping_tolerance = 0.0005, stopping_rounds = 5)
+
+
+```{r}
+ss <- splitFrame(train, seed = 1)
+train <- ss[[1]]
+valid <- ss[[2]]
+
+```
+
+```{r}
+h2o.shutdown()
+
+```
+
+
+
+
+```{r}
+h2o.init(strict_version_check= F)
+```
+```{r}
+
+```
+
+```{r}
+nfolds = 5
+# Train & Cross-validate a GBM
+my_gbm <- h2o.gbm(x = x,
+                  y = y,
+                  training_frame = train.h2o,
+                  distribution = "bernoulli",
+                  max_depth = 1,
+                  min_rows = 2,
+                  learn_rate = 0.01,
+                  nfolds = nfolds,
+                  fold_assignment = "Modulo",
+                  keep_cross_validation_predictions = TRUE,
+                  seed = 1)
+```
+
+```{r}
+my_rf <- h2o.randomForest(x = x,
+                          y = y,
+                          training_frame = train.h2o,
+                          nfolds = nfolds,
+                          fold_assignment = "Modulo",
+                          keep_cross_validation_predictions = TRUE,
+                          seed = 1)
+
+```
+
+```{r}
+base_models <- list(my_gbm@model_id, my_rf@model_id)
+```
+
+```{r}
+ensemble <- h2o.stackedEnsemble(x = x,
+                                y = y,
+                                training_frame = train.h2o,
+                                base_models = base_models)
+```
+```{r}
+h2o.performance(ensemble)
+```
+
+```{r}
+predict.rf <- as.data.frame(h2o.predict(ensemble, test.h2o))
+#pred_test = ifelse(predict.rf> 0.4 ,"1","0")
+write.csv(predict.rf,"121.csv")
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+
+
+```{r}
+library(xgboost)
+train_matrix <- xgb.DMatrix(data = as.matrix(train[,!(names(train) %in% c("Criminal"))]),
+                            label = as.matrix(train[,names(train) %in% "Criminal"]))
+
+test_matrix <- xgb.DMatrix(data = as.matrix(test))
+
+colSums(is.na(train))
+
+train$Criminal <- ifelse(train$Criminal == 'Yes',1,0) 
+```
+
+```{r}
+modelLookup("binary:logistic")
+```
+
+```{r}
+xgb_model_basic <- xgboost(data = train_matrix, max.depth = 10, eta = 0.1, nthread = 10, nround = 1000, objective = "binary:logistic", verbose = 1, early_stopping_rounds = 10)
+```
+
+```{r}
+nround = 383
+md <- xgb.train(data=train_matrix, nrounds=nround, nthread=6)
+
+basic_preds <- predict(md, test_matrix)
+summary(basic_preds)
+```
+
+
+
+```{r}
+basic_preds_labels <- ifelse(basic_preds < 0.9, 0, 1)
+
+list <- data.frame(basic_preds_labels)
+```
+
+```{r}
+write.csv(list,"shu.csv")
+```
+
+###############newwwwwww##############3
+```{r}
+fit <- glm(Criminal~.,data = train)
+
+#par(mfrow = c(2,2))
+
+#plot(fit)
+
+```
+
+```{r}
+fit.full <- glm(Criminal ~., data = train, family = binomial())
+summary(fit.full)
+```
+    -1.664e+00  3.610e-01  -4.610 4.04e-06 ***
+   -2.344e-02  4.335e-03  -5.407 6.41e-08 ***
+
+ 
+```{r}
+fit.reduce <- glm(Criminal~ IFATHER +VEREP+ANALWT_C+POVERTY3+ IRPINC3+IRFAMIN3+IIPINC3+IIFAMIN3+IIFAMSSI+IRFAMSOC+IROTHHLT+IIPRVHLT+IRPRVHLT+IIMEDICR+IRMEDICR+IIMCDCHP+IRMCDCHP+HLCNOTMO+HLCNOTYR+IRHHSIZ2+IRKI17_2+IRHH65_2 +CAIDCHIP+MEDICARE+ PRXYDATA+GRPHLTIN+PRVHLTIN,data = train,family = binomial())
+
+```
+
+```{r}
+summary(fit.reduce)
+```
+
+```{r}
+anova(fit.reduce,fit.full,test = "Chisq")
+```
+
+```{r}
+coef(fit.reduce)
+```
+
+```{r}
+exp(coef(fit.reduce))
+```
+
+```{r}
+ne <- c("IFATHER" ,"VEREP" , "ANALWT_C" ,"POVERTY3" , "IRPINC3" , 
+    "IRFAMIN3" , "IIPINC3" ,"IIFAMIN3" , "IIFAMSSI" , "IRFAMSOC" , "IROTHHLT" ,
+    "IIPRVHLT" , "IRPRVHLT" , "IIMEDICR" , "IRMEDICR" , "IIMCDCHP" , "IRMCDCHP" , 
+    "HLCNOTMO" , "HLCNOTYR" , "IRHHSIZ2" , "IRKI17_2" , "IRHH65_2" , "CAIDCHIP" , 
+    "MEDICARE" , "PRXYDATA" , "GRPHLTIN", "PRVHLTIN","Criminal")
+```
+
+```{r}
+train  <- train[,(names(train) %in% ne)]
+test <- test[,(names(test) %in% ne)]
+```
+
+```{r}
+prob_train <- predict(fit.reduce, type = "response")
+library(ROCR)
+pred <- prediction(prob_train, train$Criminal)
+perf <- performance(pred, measure="tpr", x.measure="fpr")
+
+plot(perf, col=rainbow(10), colorize=T,print.cutoffs.at = seq(0,1,0.1))
+```
+
+```{r}
+prob_test <- predict(fit.reduce, test, type = "response")
+
+preds_test <- ifelse(prob_test > 0.2, "1", "0")
+
+summary(prob_test)
+```
+
+```{r}
+p <- data.frame(preds_test)
+```
+
+```{r}
+write.csv(p,"raj.csv")
+```
+
+```{r}
+library(car)
+
+outlierTest(fit.reduce)
+```
+
+```{r}
+t <- train[25921,]
+```
+
+```{r}
+h2o.shutdown()
+```
+
+```{r}
+library(glmnet)
+tr_x <- as.matrix(train[,!names(train) %in% c("Criminal")])
+tr_y <- as.matrix(train[,names(train) %in% c("Criminal")])
+
+test_x <- as.matrix(test)
+
+
+
+glmnet_model <- cv.glmnet(x = tr_x, y = tr_y, alpha = 1, type.measure ="class", nfolds = 4, family = "binomial")
+
+summary(glmnet_model)
+```
+
+```{r}
+
+tr_y <- ifelse(tr_y  == 0 ,0,1)
+
+fit1=glmnet(tr_x,tr_y,lambda=glmnet_model$lambda.min,alpha=1)
+```
+
+```{r}
+prob_scores_train<-predict(fit1,tr_x)
+```
+
+```{r}
+pred_metrics_lasso <- prediction(prob_scores_train, train$Criminal)
+
+perf <- performance(pred_metrics_lasso, measure="tpr", x.measure="fpr")
+
+plot(perf, col=rainbow(10), colorize=T, print.cutoffs.at=seq(0,1,0.1))
+```
+
+```{r}
+prob_test = predict(fit1, test_x)
+pred_test = ifelse(prob_test>0.1,"1","0")
+
+p <- data.frame(pred_test)
+```
+
+```{r}
+write.csv(p, "sss.csv")
+```
+
+```{r}
+library(xgboost)
+train_matrix <- xgb.DMatrix(data = as.matrix(train[,!(names(train) %in% c("Criminal"))]),
+                            label = as.matrix(train[,names(train) %in% "Criminal"]))
+
+test_matrix <- xgb.DMatrix(data = as.matrix(test))
+
+colSums(is.na(train))
+
+train$Criminal <- ifelse(train$Criminal == 'Yes',1,0) 
+```
+
+```{r}
+mod_XGB_basic = xgboost(data = train_matrix, max.depth = 4, 
+                eta = 1, nthread = 2, nround = 5, verbose = 1,objective = "binary:logistic")
+```
+
+```{r}
+library(C50)
+ds <- C5.0(train[-53], train$Criminal)
+ds
+```
+
+
+```{r}
+summary(ds)
+```
+
+```{r}
+f <- predict(ds,test)
+
+```
+
+```{r}
+write.csv(f , "sub.csv")
+```
+
+```{r}
+
+```
+
